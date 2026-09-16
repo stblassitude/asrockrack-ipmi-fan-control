@@ -1,0 +1,68 @@
+# Example configuration for asrockrack-ipmi-fan-control.
+# Every field is optional; anything left out uses the built-in defaults
+# described in the README. Copy this file, trim it down to only the
+# overrides you actually need, and pass it with -config.
+
+# OpenIPMI character device used both for reading SDR temperature sensors
+# and for sending the OEM raw fan control command.
+ipmi_device: /dev/ipmi0
+
+# How often to re-read sensors and update fan duty cycles.
+interval: 5s
+
+# Safety clamp applied to every fan's computed duty cycle, in percent.
+min_duty: 20
+max_duty: 100
+
+# Number of real, independently controllable fan zones on this board. On
+# the X570D4U this is 6: FAN1, FAN2, FAN3, FAN4_1, FAN5_1, FAN6_1.
+fan_count: 6
+
+# Duty cycle applied to all fans when the daemon shuts down, so a stopped
+# controller doesn't leave fans quietly spinning at whatever duty they were
+# last set to. Set to 0 to leave fans at their last value on exit.
+safe_shutdown_duty: 100
+
+# NVMe/disk devices to poll for SMART temperature. If omitted (or if
+# auto_discover_storage is left at its default of true), all /dev/nvme*n*
+# and /dev/sd* block devices are probed automatically.
+# nvme_devices:
+#   - /dev/nvme0n1
+# disk_devices:
+#   - /dev/sda
+#   - /dev/sdb
+# auto_discover_storage: true
+
+# Per-sensor overrides. Sensors not listed here still get sensible
+# defaults: target 35C / max 70C in general, or target 50C / max 90C for
+# sensors whose name contains "CPU".
+sensors:
+  - name: "CPU Temp"      # must match the IPMI SDR sensor name
+    type: ipmi
+    target: 50
+    max: 90
+    kp: 3.0
+    ki: 0.03
+    kd: 0.3
+
+  - name: "MB Temp"
+    type: ipmi
+    target: 35
+    max: 70
+
+  - name: /dev/nvme0n1
+    type: nvme
+    device: /dev/nvme0n1
+    target: 45
+    max: 75
+
+# Fan zones. If omitted, the board's 6 real zones (FAN1, FAN2, FAN3,
+# FAN4_1, FAN5_1, FAN6_1) are used, each driven by the worst-case (max
+# duty) of every configured sensor's PID loop.
+# fans:
+#   - name: FAN1
+#     index: 0
+#     sensors: ["CPU Temp"]      # only this sensor drives this fan
+#   - name: FAN2
+#     index: 1
+#     # sensors omitted -> driven by every sensor's PID loop

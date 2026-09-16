@@ -1,0 +1,37 @@
+# nfpm (https://nfpm.goreleaser.com) package spec, used by
+# .github/workflows/release.yml to build a .deb on tagged releases.
+# VERSION and ARCH are supplied via environment variables at build time.
+name: asrockrack-ipmi-fan-control
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Stefan Bethke <stb@lassitu.de>
+homepage: https://github.com/stblassitude/asrockrack-ipmi-fan-control
+description: |
+  PID-based IPMI fan speed controller for ASRock Rack motherboards.
+  Reads IPMI, NVMe, and disk SMART temperature sensors directly and
+  drives fan duty cycles via the board's OEM raw IPMI commands, without
+  shelling out to ipmitool/nvme/smartctl.
+
+contents:
+  - src: dist/asrockrack-ipmi-fan-control
+    dst: /usr/sbin/asrockrack-ipmi-fan-control
+    file_info:
+      mode: 0755
+
+  - src: systemd/asrockrack-ipmi-fan-control.service
+    dst: /lib/systemd/system/asrockrack-ipmi-fan-control.service
+    file_info:
+      mode: 0644
+
+  - src: config.example.yaml
+    dst: /etc/asrockrack-ipmi-fan-control/config.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/postinst
+  postremove: packaging/postrm

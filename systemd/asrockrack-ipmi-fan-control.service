@@ -1,0 +1,16 @@
+[Unit]
+Description=ASRock Rack IPMI fan control
+Documentation=https://github.com/stblassitude/asrockrack-ipmi-fan-control
+After=multi-user.target
+ConditionPathExistsGlob=/dev/ipmi*
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/asrockrack-ipmi-fan-control -config /etc/asrockrack-ipmi-fan-control/config.yaml
+Restart=on-failure
+RestartSec=5
+# Needs root to open /dev/ipmi0 and issue NVMe admin / ATA SMART ioctls.
+User=root
+
+[Install]
+WantedBy=multi-user.target

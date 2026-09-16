@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+systemctl daemon-reload >/dev/null 2>&1 || true
+
+if [ "$1" = "configure" ]; then
+	echo "asrockrack-ipmi-fan-control installed but not enabled."
+	echo "Review /etc/asrockrack-ipmi-fan-control/config.yaml, then run:"
+	echo "  systemctl enable --now asrockrack-ipmi-fan-control"
+fi
+
+exit 0
