@@ -15,6 +15,10 @@ description: |
   drives fan duty cycles via the board's OEM raw IPMI commands, without
   shelling out to ipmitool/nvme/smartctl.
 
+depends:
+  # deb-systemd-helper / deb-systemd-invoke, used by the maintainer scripts.
+  - init-system-helpers (>= 1.54~)
+
 contents:
   - src: dist/asrockrack-ipmi-fan-control
     dst: /usr/sbin/asrockrack-ipmi-fan-control
@@ -34,4 +38,5 @@ contents:
 
 scripts:
   postinstall: packaging/postinst
+  preremove: packaging/prerm
   postremove: packaging/postrm

@@ -1,9 +1,23 @@
 #!/bin/sh
 set -e
 
-if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-	systemctl stop asrockrack-ipmi-fan-control >/dev/null 2>&1 || true
-	systemctl daemon-reload >/dev/null 2>&1 || true
+UNIT=asrockrack-ipmi-fan-control.service
+
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	systemctl --system daemon-reload >/dev/null || true
+fi
+
+if [ "$1" = "remove" ]; then
+	if [ -x "/usr/bin/deb-systemd-helper" ]; then
+		deb-systemd-helper mask "$UNIT" >/dev/null || true
+	fi
+fi
+
+if [ "$1" = "purge" ]; then
+	if [ -x "/usr/bin/deb-systemd-helper" ]; then
+		deb-systemd-helper purge "$UNIT" >/dev/null || true
+		deb-systemd-helper unmask "$UNIT" >/dev/null || true
+	fi
 fi
 
 exit 0

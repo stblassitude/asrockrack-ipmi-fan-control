@@ -62,11 +62,9 @@ Root (or equivalent access to `/dev/ipmi0` and the NVMe/disk block devices) is r
 
 ## Running as a service
 
-A systemd unit is provided at [systemd/asrockrack-ipmi-fan-control.service](systemd/asrockrack-ipmi-fan-control.service). It runs the binary from `/usr/sbin/asrockrack-ipmi-fan-control` with `-config /etc/asrockrack-ipmi-fan-control/config.yaml`, restarting on failure. It is not enabled automatically by the Debian package (see below) — review your config first, then:
+A systemd unit is provided at [systemd/asrockrack-ipmi-fan-control.service](systemd/asrockrack-ipmi-fan-control.service). It runs the binary from `/usr/sbin/asrockrack-ipmi-fan-control` with `-config /etc/asrockrack-ipmi-fan-control/config.yaml`, restarting on failure.
 
-```
-systemctl enable --now asrockrack-ipmi-fan-control
-```
+The Debian package (see below) enables and starts the service on install, restarts it on upgrade, and stops it on removal, the same way packages built with `dh_installsystemd` do. If you've disabled it (`systemctl disable asrockrack-ipmi-fan-control`), upgrades keep it disabled. After changing the config, run `systemctl restart asrockrack-ipmi-fan-control`.
 
 ## Releases
 

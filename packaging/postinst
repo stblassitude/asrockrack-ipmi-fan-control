@@ -1,12 +1,32 @@
 #!/bin/sh
+# Mirrors what dh_installsystemd generates: enable the unit on first
+# install (keeping an admin's "disable" across upgrades), start it on
+# install, and restart it on upgrade.
 set -e
 
-systemctl daemon-reload >/dev/null 2>&1 || true
+UNIT=asrockrack-ipmi-fan-control.service
 
-if [ "$1" = "configure" ]; then
-	echo "asrockrack-ipmi-fan-control installed but not enabled."
-	echo "Review /etc/asrockrack-ipmi-fan-control/config.yaml, then run:"
-	echo "  systemctl enable --now asrockrack-ipmi-fan-control"
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+	# Only removes masks created by deb-systemd-helper on package removal.
+	deb-systemd-helper unmask "$UNIT" >/dev/null || true
+
+	# was-enabled defaults to true, so new installations get enabled.
+	if deb-systemd-helper --quiet was-enabled "$UNIT"; then
+		deb-systemd-helper enable "$UNIT" >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state "$UNIT" >/dev/null || true
+	fi
+
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			deb-systemd-invoke restart "$UNIT" >/dev/null || true
+		else
+			deb-systemd-invoke start "$UNIT" >/dev/null || true
+		fi
+	fi
 fi
 
 exit 0

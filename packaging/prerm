@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+UNIT=asrockrack-ipmi-fan-control.service
+
+# Stop on removal only; upgrades restart the service from postinst.
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	deb-systemd-invoke stop "$UNIT" >/dev/null || true
+fi
+
+exit 0
