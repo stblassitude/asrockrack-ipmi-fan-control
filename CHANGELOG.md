@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1
+## 1.0.2
 
 ### Fixed
 
@@ -14,6 +14,10 @@
 
 - The per-tick `fan duty` INFO line names the sensor that determined each zone's duty, with its temperature and target, e.g. `driver="X570 Temp" temp=41 target=35`.
 - README: documented the default sensor classes and corrected the raw duty scale (30-63, not 15-63).
+
+## 1.0.1
+
+- Releases also attach the plain `linux/amd64` binary alongside the `.deb`.
 
 ## 1.0.0
 
