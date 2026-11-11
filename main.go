@@ -153,11 +153,96 @@ func clamp(v, lo, hi int) int {
 // default 5s interval).
 const maxConsecutiveWriteFailures = 12
 
+// sensorReading is one sensor's temperature and PID output for a tick.
+type sensorReading struct {
+	Temp, Target, Out float64
+}
+
+// zoneDriver identifies the sensor that determined a fan zone's duty. Sensor
+// is empty if none of the zone's sensors could be read.
+type zoneDriver struct {
+	Sensor       string
+	Temp, Target float64
+}
+
+func (d zoneDriver) attrs() []any {
+	if d.Sensor == "" {
+		return []any{"driver", "none"}
+	}
+	return []any{"driver", d.Sensor, "temp", d.Temp, "target", d.Target}
+}
+
+// computeDuties maps per-sensor PID outputs to fan zone duties: each zone
+// takes the maximum output of the sensors controlling it. It also returns,
+// per entry in fans, which sensor determined that maximum.
+func computeDuties(cfg *Config, sensors []*Sensor, fans []FanConfig, readings map[string]sensorReading) ([]int, []zoneDriver) {
+	duty := make([]int, cfg.FanCount)
+	drivers := make([]zoneDriver, len(fans))
+	if len(readings) == 0 {
+		for i := range duty {
+			duty[i] = 100
+		}
+		return duty, drivers
+	}
+
+	for fi, fan := range fans {
+		maxOut := -1.0
+		found := false
+		for _, s := range sensors {
+			if len(fan.Sensors) > 0 && !containsFold(fan.Sensors, s.Config.Name) {
+				continue
+			}
+			if r, ok := readings[s.Config.Name]; ok {
+				found = true
+				if r.Out > maxOut {
+					maxOut = r.Out
+					drivers[fi] = zoneDriver{Sensor: s.Config.Name, Temp: r.Temp, Target: r.Target}
+				}
+			}
+		}
+
+		d := 100 // safety default if this fan's controlling sensors are all unreadable
+		if found {
+			d = int(math.Round(maxOut))
+		}
+		d = clamp(d, cfg.MinDuty, cfg.MaxDuty)
+
+		if fan.Index >= 0 && fan.Index < len(duty) {
+			duty[fan.Index] = d
+		}
+	}
+	return duty, drivers
+}
+
+// driverLogAttrs returns log attributes naming the sensor(s) that determined
+// the fan duty: flat driver/temp/target if every zone has the same driver
+// (the common case), otherwise one group per fan zone.
+func driverLogAttrs(fans []FanConfig, drivers []zoneDriver) []any {
+	if len(drivers) == 0 {
+		return nil
+	}
+	same := true
+	for _, d := range drivers[1:] {
+		if d != drivers[0] {
+			same = false
+			break
+		}
+	}
+	if same {
+		return drivers[0].attrs()
+	}
+	attrs := make([]any, 0, len(fans))
+	for i, fan := range fans {
+		attrs = append(attrs, slog.Group(fan.Name, drivers[i].attrs()...))
+	}
+	return attrs
+}
+
 // tick runs one read-sensors/compute-PID/apply-fans iteration. It returns
 // the error from setting the fan duty, if any.
 func tick(cfg *Config, sensors []*Sensor, fans []FanConfig, fanCtl *FanController, dryRun bool, logger *slog.Logger) error {
 	now := time.Now()
-	outputs := make(map[string]float64, len(sensors))
+	readings := make(map[string]sensorReading, len(sensors))
 
 	for _, s := range sensors {
 		temp, err := s.Read()
@@ -173,45 +258,17 @@ func tick(cfg *Config, sensors []*Sensor, fans []FanConfig, fanCtl *FanControlle
 			out = 100
 			s.PID.Reset()
 		}
-		outputs[s.Config.Name] = out
+		readings[s.Config.Name] = sensorReading{Temp: temp, Target: s.Config.Target, Out: out}
 		logger.Debug("sensor reading", "sensor", s.Config.Name, "temp", temp, "target", s.Config.Target, "duty", out)
 	}
 
-	duty := make([]int, cfg.FanCount)
-	if len(outputs) == 0 {
+	if len(readings) == 0 {
 		logger.Error("no sensors could be read, forcing all fans to safety duty")
-		for i := range duty {
-			duty[i] = 100
-		}
-	} else {
-		for _, fan := range fans {
-			maxOut := -1.0
-			found := false
-			for _, s := range sensors {
-				if len(fan.Sensors) > 0 && !containsFold(fan.Sensors, s.Config.Name) {
-					continue
-				}
-				if v, ok := outputs[s.Config.Name]; ok {
-					found = true
-					if v > maxOut {
-						maxOut = v
-					}
-				}
-			}
-
-			d := 100 // safety default if this fan's controlling sensors are all unreadable
-			if found {
-				d = int(math.Round(maxOut))
-			}
-			d = clamp(d, cfg.MinDuty, cfg.MaxDuty)
-
-			if fan.Index >= 0 && fan.Index < len(duty) {
-				duty[fan.Index] = d
-			}
-		}
 	}
+	duty, drivers := computeDuties(cfg, sensors, fans, readings)
 
-	logger.Info("fan duty", "duty", duty, "dry_run", dryRun)
+	attrs := append([]any{"duty", duty}, driverLogAttrs(fans, drivers)...)
+	logger.Info("fan duty", append(attrs, "dry_run", dryRun)...)
 	if dryRun {
 		return nil
 	}
