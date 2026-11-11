@@ -33,9 +33,14 @@ safe_shutdown_duty: 100
 #   - /dev/sdb
 # auto_discover_storage: true
 
-# Per-sensor overrides. Sensors not listed here still get sensible
-# defaults: target 35C / max 70C in general, or target 50C / max 90C for
-# sensors whose name contains "CPU".
+# Per-sensor overrides. Sensors not listed here still get defaults based
+# on their name (case-insensitive):
+#   - CPU      (name contains "CPU"):                       target 50C, max 90C, kp 3.0, ki 0.03, kd 0.3
+#   - chipset  (name contains "X570", "B550", "PCH", or
+#               "Chipset"):                                 target 55C, max 80C, kp 4.0, ki 0.03, kd 0.5
+#   - general  (anything else, incl. NVMe and disks):       target 35C, max 70C, kp 4.0, ki 0.03, kd 0.5
+# Choose targets the sensor can actually reach: one held above its target
+# will eventually drive its fans to 100%.
 sensors:
   - name: "CPU Temp"      # must match the IPMI SDR sensor name
     type: ipmi

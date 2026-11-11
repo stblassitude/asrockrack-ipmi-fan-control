@@ -91,6 +91,8 @@ const (
 	defaultGeneralMax    = 70.0
 	defaultCPUTarget     = 50.0
 	defaultCPUMax        = 90.0
+	defaultChipsetTarget = 55.0
+	defaultChipsetMax    = 80.0
 
 	defaultGeneralKp = 4.0
 	defaultGeneralKi = 0.03
@@ -142,23 +144,43 @@ func IsCPUSensor(name string) bool {
 	return strings.Contains(strings.ToUpper(name), "CPU")
 }
 
+// IsChipsetSensor reports whether a sensor name looks like a chipset/PCH
+// sensor (e.g. "X570 Temp"), which idles much warmer than general board
+// sensors.
+func IsChipsetSensor(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, s := range []string{"X570", "B550", "PCH", "CHIPSET"} {
+		if strings.Contains(upper, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyDefaults fills in target/max/PID gains left unset (zero) in the config
 // with the sensible defaults from the README, based on whether the sensor
-// looks like a CPU sensor.
+// looks like a CPU sensor, a chipset sensor, or anything else.
 func (s *SensorConfig) applyDefaults() {
 	cpu := IsCPUSensor(s.Name)
+	chipset := !cpu && IsChipsetSensor(s.Name)
 
 	if s.Target == 0 {
-		if cpu {
+		switch {
+		case cpu:
 			s.Target = defaultCPUTarget
-		} else {
+		case chipset:
+			s.Target = defaultChipsetTarget
+		default:
 			s.Target = defaultGeneralTarget
 		}
 	}
 	if s.Max == 0 {
-		if cpu {
+		switch {
+		case cpu:
 			s.Max = defaultCPUMax
-		} else {
+		case chipset:
+			s.Max = defaultChipsetMax
+		default:
 			s.Max = defaultGeneralMax
 		}
 	}

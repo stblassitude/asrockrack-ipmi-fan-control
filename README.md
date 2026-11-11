@@ -15,7 +15,15 @@ For each sensor, you can configure the PID parameters. The tools tries to apply 
 
 ### Default PID Parameters
 
-For all sensors, the target temperature is 35C, with a maximum of 70C that should not be exceeded. For CPUs, the target is 50C, with 90C not to be exceeded.
+Sensors that aren't listed in the config file (or that leave `target`, `max`, or all of `kp`/`ki`/`kd` unset) get defaults based on their name, matched case-insensitively:
+
+| Class   | Name contains                          | Target | Max  | Kp  | Ki   | Kd  |
+|---------|----------------------------------------|--------|------|-----|------|-----|
+| CPU     | `CPU`                                  | 50C    | 90C  | 3.0 | 0.03 | 0.3 |
+| Chipset | `X570`, `B550`, `PCH`, or `Chipset`    | 55C    | 80C  | 4.0 | 0.03 | 0.5 |
+| General | anything else (incl. NVMe and disks)   | 35C    | 70C  | 4.0 | 0.03 | 0.5 |
+
+The target is the temperature the PID loop tries to hold; at or above max, that sensor forces all its fans to 100%. Note that a sensor which can't be cooled down to its target (e.g. a chipset that idles above it) will eventually drive its fans to 100% through the integral term, so pick targets the system can actually reach at full fan speed.
 
 ## Fans
 
