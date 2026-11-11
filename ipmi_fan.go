@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"log/slog"
 	"time"
 
 	"github.com/u-root/u-root/pkg/ipmi"
@@ -81,25 +81,43 @@ const (
 	oemIdleRaw = oemDutyRawMin
 
 	// maxDutyStep is the largest per-call change (in raw units) applied to
-	// any single byte. Confirmed-safe steps of 7-8 succeeded on real
-	// hardware; this stays comfortably under that.
+	// any single real fan zone byte. Confirmed-safe steps of 7-8 succeeded
+	// on real hardware; this stays comfortably under that.
 	maxDutyStep = 8
+
+	// seedReadAttempts is how often the BMC's current duty is read before
+	// giving up on a response that is short or out of range.
+	seedReadAttempts = 3
 )
+
+// rawCommander is the subset of *ipmi.IPMI used by FanController, so the
+// ramp logic can be tested without hardware.
+type rawCommander interface {
+	RawCmd(param []byte) ([]byte, error)
+}
 
 // FanController sends the OEM raw commands that control fan duty cycles.
 type FanController struct {
-	ipmi     *ipmi.IPMI
+	ipmi     rawCommander
 	fanCount int
+	logger   *slog.Logger
 
 	// last holds the raw byte values (length oemFanDutyBytes) most recently
 	// sent to (or read back from) the BMC, used to rate-limit how far the
-	// next SetDuty call is allowed to move each byte. nil until the first
-	// SetDuty call, which seeds it by reading the BMC's current state.
+	// next SetDuty call is allowed to move each real fan zone byte. nil
+	// until the first SetDuty call, which seeds it by reading the BMC's
+	// current state. Only the first realZones() bytes are meaningful.
 	last []byte
 }
 
-func NewFanController(h *ipmi.IPMI, fanCount int) *FanController {
-	return &FanController{ipmi: h, fanCount: fanCount}
+func NewFanController(h rawCommander, fanCount int, logger *slog.Logger) *FanController {
+	return &FanController{ipmi: h, fanCount: fanCount, logger: logger}
+}
+
+// realZones is the number of leading payload bytes that are real,
+// rate-limited fan zones. The rest are padding and always get oemIdleRaw.
+func (f *FanController) realZones() int {
+	return min(f.fanCount, oemFanDutyBytes)
 }
 
 // EnableManualControl switches every fan zone from BMC automatic control to
@@ -164,7 +182,35 @@ func (f *FanController) readCurrentDuty() ([]byte, error) {
 	if len(resp) < 1+oemFanDutyBytes {
 		return nil, fmt.Errorf("get fan duty: short response (%d bytes)", len(resp))
 	}
-	return resp[1 : 1+oemFanDutyBytes], nil
+	cur := make([]byte, oemFanDutyBytes)
+	copy(cur, resp[1:1+oemFanDutyBytes])
+	for i := 0; i < f.realZones(); i++ {
+		if cur[i] < oemDutyRawMin || cur[i] > oemDutyRawMax {
+			return nil, fmt.Errorf("get fan duty: zone %d value 0x%02x outside raw range 0x%02x-0x%02x (% x)",
+				i, cur[i], oemDutyRawMin, oemDutyRawMax, cur)
+		}
+	}
+	return cur, nil
+}
+
+// seed sets f.last from the BMC's current duty, retrying a failed or
+// implausible read a few times. If no valid reading can be obtained, it
+// seeds from target, so the next write sends the target as-is.
+func (f *FanController) seed(target []byte) {
+	var lastErr error
+	for attempt := 1; attempt <= seedReadAttempts; attempt++ {
+		cur, err := f.readCurrentDuty()
+		if err == nil {
+			f.logger.Info("fan duty ramp seeded from BMC", "raw", fmt.Sprintf("% x", cur))
+			f.last = cur
+			return
+		}
+		lastErr = err
+		f.logger.Warn("reading current fan duty failed", "attempt", attempt, "err", err)
+	}
+	f.logger.Warn("could not read a valid current fan duty, seeding ramp from target",
+		"target", fmt.Sprintf("% x", target), "err", lastErr)
+	f.last = append([]byte(nil), target...)
 }
 
 // SetDuty sets the duty cycle percentage (0-100) for each of the board's
@@ -173,24 +219,19 @@ func (f *FanController) readCurrentDuty() ([]byte, error) {
 // header slots up to the fixed 16-byte command width are filled with a
 // safe idle value, matching the board's own reference implementation.
 //
-// Each byte only moves by up to maxDutyStep per call towards its target;
-// reaching a far-away target takes multiple calls (in practice, multiple
-// control loop ticks). The returned bool is true once every byte has
-// reached its target (no more ramping needed for this duty).
+// Each real fan zone byte only moves by up to maxDutyStep per call towards
+// its target; reaching a far-away target takes multiple calls (in practice,
+// multiple control loop ticks). Padding bytes are always sent as
+// oemIdleRaw. The returned bool is true once every byte has reached its
+// target (no more ramping needed for this duty).
+//
+// If the BMC rejects the command, the current duty is read back and used as
+// the ramp's starting point for the next call, so a bad seed can't make
+// every subsequent call send the same rejected payload.
 func (f *FanController) SetDuty(duty []int) (bool, error) {
 	if len(duty) != f.fanCount {
 		return false, fmt.Errorf("expected %d duty values, got %d", f.fanCount, len(duty))
 	}
-
-	if f.last == nil {
-		cur, err := f.readCurrentDuty()
-		if err != nil {
-			return false, fmt.Errorf("seeding fan duty ramp: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "fan duty ramp seeded from BMC: % x\n", cur)
-		f.last = cur
-	}
-	prev := f.last
 
 	target := make([]byte, oemFanDutyBytes)
 	for i := range target {
@@ -203,9 +244,15 @@ func (f *FanController) SetDuty(duty []int) (bool, error) {
 		target[i] = percentToRaw(d)
 	}
 
+	if f.last == nil {
+		f.seed(target)
+	}
+	prev := f.last
+
 	payload := make([]byte, oemFanDutyBytes)
+	copy(payload, target)
 	converged := true
-	for i := range payload {
+	for i := 0; i < f.realZones(); i++ {
 		payload[i] = clampStep(prev[i], target[i], maxDutyStep)
 		if payload[i] != target[i] {
 			converged = false
@@ -214,6 +261,7 @@ func (f *FanController) SetDuty(duty []int) (bool, error) {
 
 	param := append([]byte{byte(netfnOEM), byte(cmdSetFanDuty)}, payload...)
 	if _, err := f.ipmi.RawCmd(param); err != nil {
+		f.seed(target)
 		return false, fmt.Errorf("set fan duty: %w (prev=% x target=% x payload=% x)", err, prev, target, payload)
 	}
 	f.last = payload

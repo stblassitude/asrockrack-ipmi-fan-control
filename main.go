@@ -147,8 +147,15 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// tick runs one read-sensors/compute-PID/apply-fans iteration.
-func tick(cfg *Config, sensors []*Sensor, fans []FanConfig, fanCtl *FanController, dryRun bool, logger *slog.Logger) {
+// maxConsecutiveWriteFailures is how many control loop ticks in a row may
+// fail to set the fan duty before the daemon gives up and exits non-zero,
+// so systemd restarts it with fresh BMC state (about a minute at the
+// default 5s interval).
+const maxConsecutiveWriteFailures = 12
+
+// tick runs one read-sensors/compute-PID/apply-fans iteration. It returns
+// the error from setting the fan duty, if any.
+func tick(cfg *Config, sensors []*Sensor, fans []FanConfig, fanCtl *FanController, dryRun bool, logger *slog.Logger) error {
 	now := time.Now()
 	outputs := make(map[string]float64, len(sensors))
 
@@ -206,22 +213,42 @@ func tick(cfg *Config, sensors []*Sensor, fans []FanConfig, fanCtl *FanControlle
 
 	logger.Info("fan duty", "duty", duty, "dry_run", dryRun)
 	if dryRun {
-		return
+		return nil
 	}
 	if _, err := fanCtl.SetDuty(duty); err != nil {
 		logger.Error("setting fan duty failed", "err", err)
+		return err
 	}
+	return nil
 }
 
-func run(cfg *Config, sensors []*Sensor, fanCtl *FanController, dryRun, once bool, logger *slog.Logger) {
+func run(cfg *Config, sensors []*Sensor, fanCtl *FanController, dryRun, once bool, logger *slog.Logger) error {
 	fans := cfg.Fans
 	if len(fans) == 0 {
 		fans = defaultFans(cfg)
 	}
 
-	tick(cfg, sensors, fans, fanCtl, dryRun, logger)
+	failures := 0
+	step := func() error {
+		if err := tick(cfg, sensors, fans, fanCtl, dryRun, logger); err != nil {
+			failures++
+			if failures >= maxConsecutiveWriteFailures {
+				return fmt.Errorf("setting fan duty failed %d times in a row, giving up so the service manager can restart with fresh BMC state: %w", failures, err)
+			}
+			return nil
+		}
+		failures = 0
+		return nil
+	}
+
+	if err := step(); err != nil {
+		return err
+	}
 	if once {
-		return
+		if failures > 0 {
+			return fmt.Errorf("setting fan duty failed")
+		}
+		return nil
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -233,7 +260,9 @@ func run(cfg *Config, sensors []*Sensor, fanCtl *FanController, dryRun, once boo
 	for {
 		select {
 		case <-ticker.C:
-			tick(cfg, sensors, fans, fanCtl, dryRun, logger)
+			if err := step(); err != nil {
+				return err
+			}
 		case sig := <-sigCh:
 			logger.Info("received signal, shutting down", "signal", sig.String())
 			if cfg.SafeShutdownDuty > 0 && !dryRun {
@@ -245,7 +274,7 @@ func run(cfg *Config, sensors []*Sensor, fanCtl *FanController, dryRun, once boo
 					logger.Error("failed to set safe shutdown fan duty", "err", err)
 				}
 			}
-			return
+			return nil
 		}
 	}
 }
@@ -309,7 +338,7 @@ func main() {
 			"kp", s.Config.Kp, "ki", s.Config.Ki, "kd", s.Config.Kd)
 	}
 
-	fanCtl := NewFanController(ipmiReader.ipmi, cfg.FanCount)
+	fanCtl := NewFanController(ipmiReader.ipmi, cfg.FanCount, logger)
 	if !dryRun {
 		if err := fanCtl.EnableManualControl(); err != nil {
 			logger.Error("enabling manual fan control", "err", err)
@@ -317,5 +346,9 @@ func main() {
 		}
 	}
 
-	run(cfg, sensors, fanCtl, dryRun, once, logger)
+	if err := run(cfg, sensors, fanCtl, dryRun, once, logger); err != nil {
+		logger.Error("exiting", "err", err)
+		ipmiReader.Close()
+		os.Exit(1)
+	}
 }
